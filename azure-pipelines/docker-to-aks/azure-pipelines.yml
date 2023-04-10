@@ -10,28 +10,137 @@ resources:
 
 variables:
   # Container registry service connection established during pipeline creation
-  dockerRegistryServiceConnection: 'd4048e56-abe7-41ab-baab-47d9846a4fdc'
-  imageRepository: proybaseangmvn3
-  containerRegistry: proybaseangmvn3.azurecr.io
-  containerRegistryName: proybaseangmvn3
-  dockerfilePath: '**/Dockerfile'
-  tag: '$(Build.BuildId)'
-  imagePullSecret: 'proybaseangmvn31037a0e4-auth'
+  DOCKER_REGISTRY_SERVICE_CONNECTION: 'd4048e56-abe7-41ab-baab-47d9846a4fdc'
+
+  # Image name in the repository
+  IMAGE_REPOSITORY: proybaseangmvn3
+
+  # Container Registry 
+  CONTAINER_REGISTRY: proybaseangmvn3.azurecr.io
+
+  # Container Registry name
+  CONTAINER_REGISTRY_NAME: proybaseangmvn3
+
+  # Tag for image version
+  TAG: '$(Build.BuildId)'
+
+  # Image pull secret
+  IMAGE_PULL_SECRET: 'proybaseangmvn31037a0e4-auth'
 
   # Agent VM image name
-  vmImageName: 'ubuntu-latest'
+  VM_IMAGE_NAME: 'ubuntu-latest'
 
   # Name of the new namespace being created to deploy the PR changes.
   k8sNamespaceForPR: 'review-app-$(System.PullRequest.PullRequestId)'
 
 stages:
+  - stage: Test
+    displayName: Test stage
+    jobs:
+      - job: MavenPackage
+        displayName: Maven Package and Test
+        pool:
+          vmImage: $(VM_IMAGE_NAME)
+
+        steps:
+          #----------------------------------------------------------------------
+          # Install all tools and check configuration
+          #----------------------------------------------------------------------
+          - task: NodeTool@0
+            inputs:
+              versionSpec: $(NODE_VERSION)
+            displayName: 'TOOLS: install Node.js'
+          - task: Bash@3
+            inputs:
+              targetType: 'inline'
+              script: |
+                wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+                sudo apt install ./google-chrome-stable_current_amd64.deb
+            displayName: 'TOOLS: install Chrome'
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '17'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+            displayName: 'Change Java version'
+
+          #----------------------------------------------------------------------
+          # Tests
+          #----------------------------------------------------------------------
+          - task: Bash@3
+            inputs:
+              targetType: 'inline'
+              script: 'java -version'
+            displayName: 'Verificar versión de Java'
+          - task: Npm@1
+            inputs:
+              command: 'install'
+            displayName: 'INSTALL: launch npm install'
+          - script: chmod +x mvnw
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run ci:backend:test'
+            displayName: 'TESTS: backend'
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/TEST-*.xml'
+              searchFolder: '$(Build.SourcesDirectory)/target/test-results'
+            condition: succeededOrFailed()
+            displayName: 'TESTS: publish test results'
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run ci:frontend:test'
+            displayName: 'TESTS: frontend'
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '$(Build.SourcesDirectory)/target/test-results/TESTS-results-jest.xml'
+            condition: succeededOrFailed()
+            displayName: 'TESTS: publish test results'
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run java:jar:prod'
+            displayName: 'TESTS: packaging'
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run ci:e2e:package'
+            displayName: 'E2E: Package'
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run ci:e2e:prepare'
+            displayName: 'E2E: Prepare'
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run ci:e2e:run'
+            displayName: 'E2E: Run'
+            env:
+              CYPRESS_ENABLE_RECORD: false
+          - task: PublishPipelineArtifact@1
+            inputs:
+              artifactName: 'cypress-screenshots'
+              targetPath: '$(Build.SourcesDirectory)/target/cypress/screenshots'
+            condition: failed()
+            displayName: 'E2E: Publish Cypress Screenshots'
+          - task: Npm@1
+            inputs:
+              command: 'custom'
+              customCommand: ' run ci:e2e:teardown'
+            displayName: 'E2E: Teardown'
+
   - stage: Build
     displayName: Build and package
     jobs:
       - job: Build
         displayName: Build
         pool:
-          vmImage: $(vmImageName)
+          vmImage: $(VM_IMAGE_NAME)
         steps:
           - task: JavaToolInstaller@0
             inputs:
@@ -43,8 +152,8 @@ stages:
             displayName: Login to Azure Container Registry
             inputs:
               command: login
-              containerRegistry: $(containerRegistryName)
-          - script: './mvnw package -Pprod verify jib:build -Djib.to.image=$(containerRegistry)/$(imageRepository):$(tag)'
+              containerRegistry: $(CONTAINER_REGISTRY_NAME)
+          - script: './mvnw package -Pprod verify jib:build -Djib.to.image=$(CONTAINER_REGISTRY)/$(IMAGE_REPOSITORY):$(TAG)'
             displayName: 'Build and package the application'
 
           - upload: manifests
@@ -59,7 +168,7 @@ stages:
         condition: and(succeeded(), not(startsWith(variables['Build.SourceBranch'], 'refs/pull/')))
         displayName: Deploy
         pool:
-          vmImage: $(vmImageName)
+          vmImage: $(VM_IMAGE_NAME)
         environment: 'Robcruzdproybaseangmvn3-1383.default'
         strategy:
           runOnce:
@@ -69,8 +178,8 @@ stages:
                   displayName: Create imagePullSecret
                   inputs:
                     action: createSecret
-                    secretName: $(imagePullSecret)
-                    dockerRegistryEndpoint: $(dockerRegistryServiceConnection)
+                    secretName: $(IMAGE_PULL_SECRET)
+                    dockerRegistryEndpoint: $(DOCKER_REGISTRY_SERVICE_CONNECTION)
 
                 - task: KubernetesManifest@0
                   displayName: Deploy to Kubernetes cluster
@@ -80,15 +189,15 @@ stages:
                       $(Pipeline.Workspace)/manifests/deployment.yml
                       $(Pipeline.Workspace)/manifests/service.yml
                     imagePullSecrets: |
-                      $(imagePullSecret)
+                      $(IMAGE_PULL_SECRET)
                     containers: |
-                      $(containerRegistry)/$(imageRepository):$(tag)
+                      $(CONTAINER_REGISTRY)/$(IMAGE_REPOSITORY):$(TAG)
 
       - deployment: DeployPullRequest
         displayName: Deploy Pull request
         condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/pull/'))
         pool:
-          vmImage: $(vmImageName)
+          vmImage: $(VM_IMAGE_NAME)
 
         environment: 'Robcruzdproybaseangmvn3-1383.$(k8sNamespaceForPR)'
         strategy:
@@ -108,9 +217,9 @@ stages:
                   displayName: Create imagePullSecret
                   inputs:
                     action: createSecret
-                    secretName: $(imagePullSecret)
+                    secretName: $(IMAGE_PULL_SECRET)
                     namespace: $(k8sNamespaceForPR)
-                    dockerRegistryEndpoint: $(dockerRegistryServiceConnection)
+                    dockerRegistryEndpoint: $(DOCKER_REGISTRY_SERVICE_CONNECTION)
 
                 - task: KubernetesManifest@0
                   displayName: Deploy to the new namespace in the Kubernetes cluster
@@ -121,9 +230,9 @@ stages:
                       $(Pipeline.Workspace)/manifests/deployment.yml
                       $(Pipeline.Workspace)/manifests/service.yml
                     imagePullSecrets: |
-                      $(imagePullSecret)
+                      $(IMAGE_PULL_SECRET)
                     containers: |
-                      $(containerRegistry)/$(imageRepository):$(tag)
+                      $(CONTAINER_REGISTRY)/$(IMAGE_REPOSITORY):$(TAG)
 
                 - task: Kubernetes@1
                   name: get

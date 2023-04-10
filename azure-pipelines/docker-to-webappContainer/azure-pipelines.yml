@@ -8,29 +8,31 @@ trigger:
 
 variables:
   # Azure Resource Manager connection created during pipeline creation
-  azureSubscriptionServiceConnection: '32fce50a-f821-43ef-8cc9-b18e8a630550'
+  AZURE_SUBSCRIPTION_SERVICE_CONNECTION: '32fce50a-f821-43ef-8cc9-b18e8a630550'
 
   # Web app name
-  webAppName: 'proybaseangmvn3con'
+  WEBAPP_NAME: 'proybaseangmvn3con'
 
   # Environment name
-  environmentName: 'proybaseangmvn'
+  ENVIRONMENT_NAME: 'proybaseangmvn'
 
   # Agent VM image name
-  vmImageName: 'ubuntu-latest'
+  VM_IMAGE_NAME: 'ubuntu-latest'
 
-  containerRegistry: proybaseangmvn.azurecr.io
-  dockerRegistryServiceConnection: 'a9711b6e-a907-4497-898a-98ba60a3c21e'
-  imageRepository: proybaseangmvn3
-  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
-  tag: '$(Build.BuildId)'
+  # Container Registry 
+  CONTAINER_REGISTRY: proybaseangmvn.azurecr.io
 
+  # Container Registry name
+  CONTAINER_REGISTRY_NAME: proybaseangmvn3
+
+  # Image name in the repository
+  IMAGE_REPOSITORY: proybaseangmvn3
+
+  # Tag for image version
+  TAG: '$(Build.BuildId)'
+
+  # Node version
   NODE_VERSION: 16.17.0
-  SPRING_OUTPUT_ANSI_ENABLED: NEVER
-  SPRING_JPA_SHOW_SQL: false
-  JHI_DISABLE_WEBPACK_LOGS: true
-  NG_CLI_ANALYTICS: 'false'
-  JHI_E2E_HEADLESS: true
 
 stages:
   - stage: Test
@@ -39,7 +41,7 @@ stages:
       - job: MavenPackage
         displayName: Maven Package and Test
         pool:
-          vmImage: $(vmImageName)
+          vmImage: $(VM_IMAGE_NAME)
 
         steps:
           #----------------------------------------------------------------------
@@ -139,7 +141,7 @@ stages:
       - job: Build
         displayName: Build
         pool:
-          vmImage: $(vmImageName)
+          vmImage: $(VM_IMAGE_NAME)
         steps:
           - task: JavaToolInstaller@0
             inputs:
@@ -151,14 +153,9 @@ stages:
             displayName: Login to Azure Container Registry
             inputs:
               command: login
-              containerRegistry: proybaseangmvn
-          - script: './mvnw package -Pprod verify jib:build -Djib.to.image=$(containerRegistry)/$(imageRepository):$(tag)'
+              containerRegistry: $(CONTAINER_REGISTRY)
+          - script: './mvnw package -Pprod verify jib:build -Djib.to.image=$(CONTAINER_REGISTRY)/$(IMAGE_REPOSITORY):$(TAG)'
             displayName: 'Build and package the application'
-          # - task: Docker@2
-          #   displayName: Push Docker image to ACR
-          #   inputs:
-          #     command: push
-          #     repository: proybaseangmvn.azurecr.io/proybaseangmvn3
 
   - stage: Deploy
     displayName: Deploy stage
@@ -168,12 +165,11 @@ stages:
       - job: Deploy
         displayName: Deploy
         pool:
-          vmImage: $(vmImageName)
+          vmImage: $(VM_IMAGE_NAME)
         steps:
-          ## Add the below snippet at the end of your pipeline
           - task: AzureWebAppContainer@1
             displayName: 'Azure Web App on Container Deploy'
             inputs:
-              azureSubscription: $(azureSubscriptionServiceConnection)
-              appName: $(webAppName)
-              imageName: $(containerRegistry)/$(imageRepository):$(tag)
+              azureSubscription: $(AZURE_SUBSCRIPTION_SERVICE_CONNECTION)
+              appName: $(WEBAPP_NAME)
+              imageName: $(CONTAINER_REGISTRY)/$(IMAGE_REPOSITORY):$(TAG)
