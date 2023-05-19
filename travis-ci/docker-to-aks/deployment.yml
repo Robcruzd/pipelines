@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proybaseangmvn3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proybaseangmvn3
+  template:
+    metadata:
+      labels:
+        app: proybaseangmvn3
+    spec:
+      containers:
+        - name: proybaseacr
+          image: proybaseacr.azurecr.io/proybase_image
+          ports:
+            - containerPort: 80
