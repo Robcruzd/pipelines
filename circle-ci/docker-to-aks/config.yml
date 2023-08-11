@@ -59,7 +59,14 @@ jobs:
       # - run:
       #     name: 'E2E: Teardown'
       #     command: npm run ci:e2e:teardown
+
   deliver:
+    environment:
+      CONTAINER_REGISTRY_PASSWORD: n4yPSHC3s9lxYOfGXB3joVxVOssE7+vfrXcLGuGFr5+ACRDQeGic
+      CONTAINER_REGISTRY: proybaseazcr.azurecr.io
+      CONTAINER_REGISTRY_USERNAME: proybaseazcr
+      IMAGE_REPOSITORY: proybase_image
+      TAG: $CIRCLE_WORKFLOW_ID
     machine:
       image: ubuntu-2004:current
     steps:
@@ -68,37 +75,59 @@ jobs:
           name: Install Java 17
           command: |
             sudo apt-get update && sudo apt-get install -y openjdk-17-jdk
-      - run: 
-          name: Generate JAR
+      - run:
+          name: Give Executable Power
+          command: 'chmod +x mvnw'
+      - run:
+          name: Login to Azure Container Registry
           command: |
-            chmod +x mvnw
-            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64/
-            npm run java:jar:prod
-      - persist_to_workspace:
-          root: .
-          paths:
-            - target/proybaseangmvn-4-0.0.1-SNAPSHOT.jar
-      - store_artifacts:
-          path: target/proybaseangmvn-4-0.0.1-SNAPSHOT.jar
-
+            echo $CONTAINER_REGISTRY_PASSWORD | docker login $CONTAINER_REGISTRY --username $CONTAINER_REGISTRY_USERNAME --password-stdin
+      - run:
+          name: Build and package the application
+          command: |
+            ./mvnw package -Pprod verify jib:build -Djib.to.image=$CONTAINER_REGISTRY/$IMAGE_REPOSITORY:$CIRCLE_WORKFLOW_ID
+  
   deploy:
     environment:
       AZURE_CLIENT_ID: 7eecbc41-597f-48fc-9ddf-76f43f819d05
       AZURE_CLIENT_SECRET: duU8Q~B6u3Di2fXKdndbkeeZM1Jz8f8v6xTt8aPL
       AZURE_TENANT_ID: 642abfe9-8349-406e-a44c-45336e1e0e3c
-    docker:
-      - image: "mcr.microsoft.com/azure-cli"
+      AZURE_RESOURCE_GROUP: proybase
+      AZURE_APP_SERVICE_PLAN: proybaseappservplan
+      CLUSTER_NAME: proybasecluster
+      CONTAINER_REGISTRY_USERNAME: proybaseazcr
+      CONTAINER_REGISTRY: proybaseazcr.azurecr.io
+      CONTAINER_REGISTRY_PASSWORD: n4yPSHC3s9lxYOfGXB3joVxVOssE7+vfrXcLGuGFr5+ACRDQeGic
+      IMAGE_REPOSITORY: proybase_image
+      TAG: $CIRCLE_WORKFLOW_ID
+    machine:
+      image: ubuntu-2004:current
     steps:
-      - attach_workspace:
-          at: .
+      - checkout
+      - run:
+          name: Install az y kubectl
+          command: |
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+            curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x ./kubectl
+            sudo mv ./kubectl /usr/local/bin/kubectl
+      - run:
+          name: Login container
+          command: echo "${CONTAINER_REGISTRY_PASSWORD}" | docker login --username ${CONTAINER_REGISTRY_USERNAME} --password-stdin ${CONTAINER_REGISTRY}
       - run:
           name: Authenticate with Azure
-          command: |
-            az login --service-principal --username $AZURE_CLIENT_ID --password $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
+          command: az login --service-principal --username $AZURE_CLIENT_ID --password $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
       - run:
-          name: Deploy to Azure
+          name: Set AKS context
+          command: az aks get-credentials --resource-group "$AZURE_RESOURCE_GROUP" --name "$CLUSTER_NAME"
+      - run:
+          name: Deploy to AKS
           command: |
-            az webapp deploy --resource-group proybase --name proybaseappserv --src-path $(find . -name "proy*.jar") --type jar --verbose
+            kubectl apply -f .circleci/manifests/deployment.yml -f .circleci/manifests/service.yml
+            kubectl set image deployment/robcruzdproybaseangmvn $CONTAINER_REGISTRY_USERNAME=$CONTAINER_REGISTRY/$IMAGE_REPOSITORY:$CIRCLE_WORKFLOW_ID
+      - run:
+          name: Azure logout
+          command: az logout
 
 workflows:
   version: 2
